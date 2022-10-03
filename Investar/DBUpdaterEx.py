@@ -10,7 +10,7 @@ class DBUpdater:
     def __init__(self):
         """생성자: MariaDB 연결 및 종목코드 딕셔너리 생성"""
         self.conn = pymysql.connect(host='localhost', user='root',
-            password='myPa$$word', db='INVESTAR', charset='utf8')
+            password='sangho', db='investar', charset='utf8mb4', port=3306)
         
         with self.conn.cursor() as curs:
             sql = """
@@ -54,7 +54,10 @@ class DBUpdater:
     def update_comp_info(self):
         """종목코드를 company_info 테이블에 업데이트 한 후 딕셔너리에 저장"""
         sql = "SELECT * FROM company_info"
-        df = pd.read_sql(sql, self.conn)
+        curs = self.conn.cursor(pymysql.cursors.DictCursor)
+        curs.execute(sql)
+        # df = pd.read_sql(sql, self.conn)
+        df = pd.DataFrame(curs.fetchall())
         for idx in range(len(df)):
             self.codes[df['code'].values[idx]] = df['company'].values[idx]
                     
@@ -82,19 +85,21 @@ class DBUpdater:
         """네이버에서 주식 시세를 읽어서 데이터프레임으로 반환"""
         try:
             url = f"http://finance.naver.com/item/sise_day.nhn?code={code}"
-            html = BeautifulSoup(requests.get(url,
-                headers={'User-agent': 'Mozilla/5.0'}).text, "lxml")
+            html = BeautifulSoup(requests.get(url, headers={'User-agent': 'Mozilla/5.0'}).text, "lxml")
             pgrr = html.find("td", class_="pgRR")
             if pgrr is None:
                 return None
             s = str(pgrr.a["href"]).split('=')
-            lastpage = s[-1] 
+            lastpage = s[-1]
             df = pd.DataFrame()
             pages = min(int(lastpage), pages_to_fetch)
             for page in range(1, pages + 1):
                 pg_url = '{}&page={}'.format(url, page)
-                df = df.append(pd.read_html(requests.get(pg_url,
-                    headers={'User-agent': 'Mozilla/5.0'}).text)[0])                                          
+                # df = df.append(pd.read_html(requests.get(pg_url,
+                #     headers={'User-agent': 'Mozilla/5.0'}).text)[0])
+                tmp_df = pd.read_html(requests.get(pg_url, headers={'User-agent': 'Mozilla/5.0'}).text)[0]
+                df = pd.concat([df, tmp_df])
+
                 tmnow = datetime.now().strftime('%Y-%m-%d %H:%M')
                 print('[{}] {} ({}) : {:04d}/{:04d} pages are downloading...'.
                     format(tmnow, company, code, page, pages), end="\r")
@@ -124,24 +129,24 @@ class DBUpdater:
                 ' %H:%M'), num+1, company, code, len(df)))
 
     def update_daily_price(self, pages_to_fetch):
-        """KRX 상장법인의 주식 시세를 네이버로부터 읽어서 DB에 업데이트"""  
+        """KRX 상장법인의 주식 시세를 네이버로부터 읽어서 DB에 업데이트"""
         for idx, code in enumerate(self.codes):
             df = self.read_naver(code, self.codes[code], pages_to_fetch)
             if df is None:
                 continue
-            self.replace_into_db(df, idx, code, self.codes[code])            
+            self.replace_into_db(df, idx, code, self.codes[code])
 
     def execute_daily(self):
         """실행 즉시 및 매일 오후 다섯시에 daily_price 테이블 업데이트"""
         self.update_comp_info()
-        
+
         try:
             with open('config.json', 'r') as in_file:
                 config = json.load(in_file)
                 pages_to_fetch = config['pages_to_fetch']
         except FileNotFoundError:
             with open('config.json', 'w') as out_file:
-                pages_to_fetch = 100 
+                pages_to_fetch = 100
                 config = {'pages_to_fetch': 1}
                 json.dump(config, out_file)
         self.update_daily_price(pages_to_fetch)
@@ -156,13 +161,13 @@ class DBUpdater:
                 minute=0, second=0)
         else:
             tmnext = tmnow.replace(day=tmnow.day+1, hour=17, minute=0,
-                second=0)   
+                second=0)
         tmdiff = tmnext - tmnow
-        secs = tmdiff.seconds
-        t = Timer(secs, self.execute_daily)
+        # secs = tmdiff.seconds
+        # t = Timer(secs, self.execute_daily)
         print("Waiting for next update ({}) ... ".format(tmnext.strftime
             ('%Y-%m-%d %H:%M')))
-        t.start()
+        # t.start()
 
 if __name__ == '__main__':
     dbu = DBUpdater()
